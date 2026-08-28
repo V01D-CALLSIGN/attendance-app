@@ -8,17 +8,16 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var repository = LocalAttendanceRepository()
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if repository.setupComplete { MainTabView() }
+            else { OnboardingFlow() }
         }
-        .padding()
+        .environmentObject(repository)
+        .tint(AppTheme.deep)
+        .preferredColorScheme(.light)
     }
 }
 
-#Preview {
-    ContentView()
-}
+#Preview { ContentView() }
