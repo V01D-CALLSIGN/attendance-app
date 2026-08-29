@@ -112,53 +112,6 @@ private struct DashboardMiniCard: View {
     }
 }
 
-struct CalendarView: View {
-    @EnvironmentObject private var repo: LocalAttendanceRepository
-    @State private var showAddClass = false
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Your teaching week").font(.system(size: 32, weight: .bold, design: .rounded))
-                if repo.classes.isEmpty {
-                    EmptyStateView(
-                        icon: "calendar.badge.plus",
-                        title: "Your calendar is empty",
-                        message: "Create a class and it will appear in your weekly schedule.",
-                        actionTitle: "Add your first class"
-                    ) { showAddClass = true }
-                } else {
-                    WeeklyScheduleView(classes: repo.classes)
-                }
-                ForEach(Weekday.allCases) { day in
-                    let courses = repo.classes.filter { $0.weekday == day }
-                    if !courses.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(day.name.uppercased()).font(.caption.bold()).tracking(1.2).foregroundStyle(AppTheme.muted)
-                            ForEach(courses) { course in
-                                NavigationLink { ClassRosterView(course: course) } label: {
-                                    HStack {
-                                        Circle().fill(course.color.color).frame(width: 12)
-                                        VStack(alignment: .leading) {
-                                            Text(course.displayName).font(.headline)
-                                            Text(course.location.isEmpty ? course.timeLabel : "\(course.timeLabel) · \(course.location)")
-                                                .font(.caption).foregroundStyle(AppTheme.muted)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                    }
-                                        .foregroundStyle(AppTheme.ink).cardStyle()
-                                }
-                            }
-                        }
-                    }
-                }
-            }.padding(20)
-        }.background(AppTheme.background).navigationTitle("Calendar").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button { showAddClass = true } label: { Image(systemName: "plus") } }
-            .sheet(isPresented: $showAddClass) { AddClassSheet() }
-    }
-}
-
 struct StudentDirectoryView: View {
     @EnvironmentObject private var repo: LocalAttendanceRepository
     @State private var search = ""; @State private var showAdd = false
@@ -167,7 +120,7 @@ struct StudentDirectoryView: View {
             if repo.students.isEmpty {
                 EmptyStateView(
                     icon: "person.badge.plus",
-                    title: "Add your first student",
+                    title: "No students yet.",
                     message: "Your student database is empty. Add someone to get started.",
                     actionTitle: "Create a student"
                 ) { showAdd = true }
@@ -175,15 +128,15 @@ struct StudentDirectoryView: View {
             } else {
             LazyVStack(spacing: 10) {
                 ForEach(repo.students.filter { search.isEmpty || $0.fullName.localizedCaseInsensitiveContains(search) }) { student in
-                    VStack(spacing: 12) {
-                        HStack { AvatarView(student: student); VStack(alignment: .leading) { Text(student.fullName).font(.headline); Text(student.gradeLabel).font(.subheadline).foregroundStyle(AppTheme.muted) }; Spacer() }
+                    NavigationLink { StudentProfileView(studentID: student.id) } label: { VStack(spacing: 12) {
+                        HStack { AvatarView(student: student); VStack(alignment: .leading) { Text(student.fullName).font(.headline); Text(student.active ? student.gradeLabel : "\(student.gradeLabel) · Inactive").font(.subheadline).foregroundStyle(AppTheme.muted) }; Spacer() }
                         let assigned = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id } }
                         if !assigned.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack { ForEach(assigned) { Text($0.displayName).font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 6).background($0.color.color.opacity(0.15)).foregroundStyle($0.color.color).clipShape(Capsule()) } }
                             }
                         }
-                    }.cardStyle()
+                    }.foregroundStyle(AppTheme.ink).cardStyle() }
                 }
             }.padding(16)
             }

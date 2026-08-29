@@ -11,6 +11,8 @@ protocol AttendanceRepository: AnyObject {
     var makeupCredits: [MakeupCredit] { get }
 
     func addStudent(_ student: Student)
+    func updateStudent(_ student: Student) -> Bool
+    func deleteOrArchiveStudent(id: UUID) -> Bool
     func addClass(_ course: ClassCourse)
     func updateClass(_ course: ClassCourse)
     func removeClass(id: UUID)
@@ -40,6 +42,7 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
     @Published private(set) var sessions: [ClassSession]
     @Published private(set) var attendance: [AttendanceRecord]
     @Published private(set) var makeupCredits: [MakeupCredit]
+    @Published var lastError: String?
     @Published var setupComplete: Bool {
         didSet { persist() }
     }
@@ -61,6 +64,7 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         setupComplete = snapshot.setupComplete
         onboardingStarted = snapshot.onboardingStarted
             ?? (snapshot.setupComplete || !snapshot.classes.isEmpty || !snapshot.students.isEmpty)
+        lastError = nil
     }
 
     private static var defaultStorageURL: URL {
@@ -76,7 +80,8 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         return snapshot
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist() -> Bool {
         let snapshot = LocalSnapshot(
             students: students,
             classes: classes,
@@ -91,14 +96,44 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: storageURL, options: .atomic)
+            lastError = nil
+            return true
         } catch {
-            assertionFailure("Unable to persist local attendance data: \(error)")
+            lastError = "Changes could not be saved. Please try again."
+            return false
         }
     }
 
     func addStudent(_ student: Student) {
         students.append(student)
         persist()
+    }
+
+    @discardableResult
+    func updateStudent(_ student: Student) -> Bool {
+        guard let index = students.firstIndex(where: { $0.id == student.id }) else { return false }
+        students[index] = student
+        return persist()
+    }
+
+    @discardableResult
+    func deleteOrArchiveStudent(id: UUID) -> Bool {
+        let sessionIDs = Set(attendance.filter { $0.studentID == id }.map(\.sessionID))
+        let hasHistory = !sessionIDs.isEmpty || makeupCredits.contains { $0.studentID == id }
+        if hasHistory, let index = students.firstIndex(where: { $0.id == id }) {
+            students[index].isActive = false
+            enrollments = enrollments.map { enrollment in
+                guard enrollment.studentID == id, enrollment.endsOn == nil else { return enrollment }
+                var closed = enrollment
+                closed.endsOn = Date.now
+                return closed
+            }
+        } else {
+            students.removeAll { $0.id == id }
+            enrollments.removeAll { $0.studentID == id }
+            makeupCredits.removeAll { $0.studentID == id }
+        }
+        return persist()
     }
 
     func addClass(_ course: ClassCourse) {
@@ -117,9 +152,113 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         persist()
     }
 
+    @discardableResult
+    func createClass(_ course: ClassCourse, assignedStudentIDs: Set<UUID>) -> Bool {
+        guard !classes.contains(where: { $0.id == course.id }) else { return false }
+        classes.append(course)
+        for studentID in assignedStudentIDs {
+            enrollments.append(enrollment(studentID: studentID, course: course, startsOn: course.startDate))
+        }
+        return persist()
+    }
+
+    @discardableResult
+    func saveClassEdit(
+        original: ClassCourse,
+        edited: ClassCourse,
+        occurrenceDate: Date,
+        scope: RecurrenceEditScope,
+        assignedStudentIDs: Set<UUID>
+    ) -> Bool {
+        let calendar = Calendar.current
+        let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        switch scope {
+        case .thisOnly:
+            let originalDay = occurrenceDay
+            let sessionIndex: Int
+            if let existing = sessions.firstIndex(where: {
+                $0.classID == original.id && calendar.isDate($0.originalDate ?? $0.date, inSameDayAs: originalDay)
+            }) {
+                sessionIndex = existing
+            } else {
+                sessions.append(ClassSession(classID: original.id, date: originalDay, originalDate: originalDay))
+                sessionIndex = sessions.count - 1
+            }
+            let movedDay = calendar.startOfDay(for: edited.startDate)
+            sessions[sessionIndex].date = movedDay
+            sessions[sessionIndex].originalDate = originalDay
+            sessions[sessionIndex].classNameSnapshot = Self.displayName(type: edited.name, date: movedDay)
+            sessions[sessionIndex].startMinutesSnapshot = edited.startMinutes
+            sessions[sessionIndex].endMinutesSnapshot = edited.endMinutes
+            sessions[sessionIndex].locationSnapshot = edited.location
+            sessions[sessionIndex].recurrenceSnapshot = edited.recurrence
+            sessions[sessionIndex].notesSnapshot = edited.notes
+            sessions[sessionIndex].isMakeupClassSnapshot = edited.isMakeupClass
+            sessions[sessionIndex].isCancelled = false
+            synchronizeEnrollments(classID: original.id, studentIDs: assignedStudentIDs, startsOn: original.startDate)
+        case .thisAndFuture:
+            guard let oldIndex = classes.firstIndex(where: { $0.id == original.id }) else { return false }
+            let previousDay = calendar.date(byAdding: .day, value: -1, to: occurrenceDay)!
+            classes[oldIndex].endDate = previousDay
+            for index in enrollments.indices where enrollments[index].classID == original.id && enrollments[index].endsOn == nil {
+                enrollments[index].endsOn = previousDay
+            }
+            var future = edited
+            future.id = UUID()
+            future.startDate = calendar.startOfDay(for: edited.startDate)
+            future.weekday = Self.weekday(for: future.startDate)
+            classes.append(future)
+            for studentID in assignedStudentIDs {
+                enrollments.append(enrollment(studentID: studentID, course: future, startsOn: future.startDate))
+            }
+        case .every:
+            guard let index = classes.firstIndex(where: { $0.id == original.id }) else { return false }
+            var replacement = edited
+            replacement.id = original.id
+            replacement.startDate = original.startDate
+            replacement.weekday = Self.weekday(for: edited.startDate)
+            classes[index] = replacement
+            synchronizeEnrollments(classID: original.id, studentIDs: assignedStudentIDs, startsOn: replacement.startDate)
+        }
+        return persist()
+    }
+
+    @discardableResult
+    func deleteClass(_ course: ClassCourse, occurrenceDate: Date, scope: RecurrenceEditScope) -> Bool {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: occurrenceDate)
+        switch scope {
+        case .thisOnly:
+            let index: Int
+            if let existing = sessions.firstIndex(where: {
+                $0.classID == course.id && calendar.isDate($0.originalDate ?? $0.date, inSameDayAs: day)
+            }) {
+                index = existing
+            } else {
+                sessions.append(ClassSession(classID: course.id, date: day, originalDate: day))
+                index = sessions.count - 1
+            }
+            sessions[index].isCancelled = true
+        case .thisAndFuture:
+            guard let index = classes.firstIndex(where: { $0.id == course.id }) else { return false }
+            let previousDay = calendar.date(byAdding: .day, value: -1, to: day)!
+            classes[index].endDate = previousDay
+            for index in enrollments.indices where enrollments[index].classID == course.id && enrollments[index].endsOn == nil {
+                enrollments[index].endsOn = previousDay
+            }
+        case .every:
+            classes.removeAll { $0.id == course.id }
+            let previousDay = calendar.date(byAdding: .day, value: -1, to: day)!
+            for index in enrollments.indices where enrollments[index].classID == course.id && enrollments[index].endsOn == nil {
+                enrollments[index].endsOn = previousDay
+            }
+        }
+        return persist()
+    }
+
     func setEnrollment(studentID: UUID, classID: UUID, assigned: Bool) {
         if assigned {
-            guard !enrollments.contains(where: { $0.studentID == studentID && $0.classID == classID }) else { return }
+            guard !enrollments.contains(where: { $0.studentID == studentID && $0.classID == classID && $0.endsOn == nil }) else { return }
             let course = classes.first { $0.id == classID }
             enrollments.append(Enrollment(
                 studentID: studentID,
@@ -130,7 +269,9 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
                 endMinutesSnapshot: course?.endMinutes
             ))
         } else {
-            enrollments.removeAll { $0.studentID == studentID && $0.classID == classID }
+            for index in enrollments.indices where enrollments[index].studentID == studentID && enrollments[index].classID == classID && enrollments[index].endsOn == nil {
+                enrollments[index].endsOn = Date.now
+            }
         }
         persist()
     }
@@ -143,9 +284,14 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         let new = ClassSession(
             classID: course.id,
             date: day,
+            originalDate: day,
             classNameSnapshot: course.displayName,
             startMinutesSnapshot: course.startMinutes,
-            endMinutesSnapshot: course.endMinutes
+            endMinutesSnapshot: course.endMinutes,
+            locationSnapshot: course.location,
+            recurrenceSnapshot: course.recurrence,
+            notesSnapshot: course.notes,
+            isMakeupClassSnapshot: course.isMakeupClass
         )
         sessions.append(new)
         persist()
@@ -197,8 +343,39 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
     }
 
     func students(in classID: UUID) -> [Student] {
-        let ids = Set(enrollments.filter { $0.classID == classID }.map(\.studentID))
-        return students.filter { ids.contains($0.id) }
+        let ids = Set(enrollments.filter { $0.classID == classID && $0.endsOn == nil }.map(\.studentID))
+        return students.filter { ids.contains($0.id) && $0.active }
+    }
+
+    func assignedStudentIDs(classID: UUID) -> Set<UUID> {
+        Set(enrollments.filter { $0.classID == classID && $0.endsOn == nil }.map(\.studentID))
+    }
+
+    private func synchronizeEnrollments(classID: UUID, studentIDs: Set<UUID>, startsOn: Date) {
+        for index in enrollments.indices where enrollments[index].classID == classID && enrollments[index].endsOn == nil && !studentIDs.contains(enrollments[index].studentID) {
+            enrollments[index].endsOn = Date.now
+        }
+        guard let course = classes.first(where: { $0.id == classID }) else { return }
+        let existing = Set(enrollments.filter { $0.classID == classID && $0.endsOn == nil }.map(\.studentID))
+        for studentID in studentIDs.subtracting(existing) {
+            enrollments.append(enrollment(studentID: studentID, course: course, startsOn: startsOn))
+        }
+    }
+
+    private func enrollment(studentID: UUID, course: ClassCourse, startsOn: Date) -> Enrollment {
+        Enrollment(
+            studentID: studentID, classID: course.id, startsOn: startsOn,
+            classNameSnapshot: course.displayName, weekdaySnapshot: course.weekday,
+            startMinutesSnapshot: course.startMinutes, endMinutesSnapshot: course.endMinutes
+        )
+    }
+
+    private static func weekday(for date: Date) -> Weekday {
+        Weekday(rawValue: Calendar.current.component(.weekday, from: date)) ?? .monday
+    }
+
+    private static func displayName(type: String, date: Date) -> String {
+        "\(type) Class \(weekday(for: date).name)"
     }
 
     func resetAllData() {

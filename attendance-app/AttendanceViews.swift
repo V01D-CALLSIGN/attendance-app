@@ -145,7 +145,7 @@ private struct StudentPicker: View {
     @State private var selected: Set<UUID> = []
     var grades: [String] { ["All"] + Array(Set(repo.students.map(\.grade))).sorted() }
     var visible: [Student] {
-        repo.students.filter { (search.isEmpty || $0.fullName.localizedCaseInsensitiveContains(search)) && (grade == "All" || $0.grade == grade) }
+        repo.students.filter { $0.active && (search.isEmpty || $0.fullName.localizedCaseInsensitiveContains(search)) && (grade == "All" || $0.grade == grade) }
     }
     var body: some View {
         NavigationStack {

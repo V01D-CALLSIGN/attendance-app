@@ -28,12 +28,19 @@ struct AvatarView: View {
     let student: Student
     var size: CGFloat = 46
     var body: some View {
-        Text(student.initials)
-            .font(.system(size: size * 0.34, weight: .bold, design: .rounded))
-            .frame(width: size, height: size)
-            .background(AppTheme.deep.opacity(0.12))
-            .foregroundStyle(AppTheme.deep)
-            .clipShape(Circle())
+        Group {
+            if let data = student.photoData, let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Text(student.initials)
+                    .font(.system(size: size * 0.34, weight: .bold, design: .rounded))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppTheme.deep.opacity(0.12))
+                    .foregroundStyle(AppTheme.deep)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 }
 

@@ -54,11 +54,15 @@ struct Student: Identifiable, Hashable, Codable {
     var grade: String
     var contact: String = ""
     var notes: String = ""
+    var emergencyContact: String? = nil
+    var photoData: Data? = nil
+    var isActive: Bool? = nil
     var fullName: String { "\(firstName) \(lastName)" }
     var initials: String { "\(firstName.first.map(String.init) ?? "")\(lastName.first.map(String.init) ?? "")".uppercased() }
     var gradeLabel: String {
         grade.hasPrefix("Grade") || grade == "Pre-K" || grade == "Kindergarten" ? grade : "Grade \(grade)"
     }
+    var active: Bool { isActive ?? true }
 }
 
 struct ClassCourse: Identifiable, Hashable, Codable {
@@ -73,6 +77,7 @@ struct ClassCourse: Identifiable, Hashable, Codable {
     var location: String
     var color: ClassColor
     var isMakeupClass = false
+    var notes: String? = nil
 
     var displayName: String { "\(name) Class \(weekday.name)" }
     var timeLabel: String { "\(Self.time(startMinutes))–\(Self.time(endMinutes))" }
@@ -98,12 +103,17 @@ struct Enrollment: Identifiable, Hashable, Codable {
 struct ClassSession: Identifiable, Hashable, Codable {
     var id = UUID()
     let classID: UUID
-    let date: Date
+    var date: Date
+    var originalDate: Date? = nil
     var isComplete = false
     var classNameSnapshot: String? = nil
     var startMinutesSnapshot: Int? = nil
     var endMinutesSnapshot: Int? = nil
     var isCancelled: Bool? = nil
+    var locationSnapshot: String? = nil
+    var recurrenceSnapshot: String? = nil
+    var notesSnapshot: String? = nil
+    var isMakeupClassSnapshot: Bool? = nil
 
     func displayName(classes: [ClassCourse]) -> String {
         classNameSnapshot ?? classes.first(where: { $0.id == classID })?.displayName ?? "Archived Class"
@@ -118,6 +128,13 @@ struct ClassSession: Identifiable, Hashable, Codable {
         }
         return classes.first(where: { $0.id == classID })?.timeLabel ?? "Time unavailable"
     }
+}
+
+enum RecurrenceEditScope: String, CaseIterable, Identifiable {
+    case thisOnly = "This class only"
+    case thisAndFuture = "This and future classes"
+    case every = "Every class in the series"
+    var id: String { rawValue }
 }
 
 enum AttendanceStatus: String, CaseIterable, Codable, Identifiable {
