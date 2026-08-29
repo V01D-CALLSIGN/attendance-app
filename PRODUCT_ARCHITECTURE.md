@@ -63,6 +63,8 @@ All views depend on the `AttendanceRepository` protocol. `LocalAttendanceReposit
 - Makeup search across the entire student database with visible credit state.
 - Blank first-run state with user-created data persisted as an atomic Codable snapshot in Application Support.
 - Development-only confirmed reset that deletes the local snapshot and resets onboarding.
+- Monday-to-Sunday conversational class setup with Art/Study selection, time confirmation, same-day repeats, and weekly review.
+- Monthly student reports derived from enrollment-effective recurring sessions, with enrollment and session snapshots protecting historical class labels and times.
 
 ### Phase 2 — durable single-user product
 

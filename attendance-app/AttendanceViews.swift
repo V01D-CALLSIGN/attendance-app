@@ -20,7 +20,7 @@ struct ClassRosterView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 9) {
                         Text(course.isMakeupClass ? "MAKEUP SESSION" : "TODAY'S CLASS").font(.caption.bold()).tracking(1.3).foregroundStyle(.white.opacity(0.75))
-                        Text(course.name).font(.system(size: 38, weight: .bold, design: .rounded))
+                        Text(course.displayName).font(.system(size: 38, weight: .bold, design: .rounded))
                         HStack {
                             Label(course.timeLabel, systemImage: "clock")
                             if !course.location.isEmpty {
@@ -99,7 +99,7 @@ private struct AttendanceRow: View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
                 AvatarView(student: student)
-                VStack(alignment: .leading, spacing: 3) { Text(student.fullName).font(.headline); Text("Grade \(student.grade)").font(.caption).foregroundStyle(AppTheme.muted) }
+                VStack(alignment: .leading, spacing: 3) { Text(student.fullName).font(.headline); Text(student.gradeLabel).font(.caption).foregroundStyle(AppTheme.muted) }
                 Spacer()
                 Button {
                     beforeChange()
@@ -183,9 +183,9 @@ private struct StudentPicker: View {
         }
     }
     private func studentDetail(_ student: Student) -> String {
-        let classNames = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id } }.map(\.name).joined(separator: ", ")
+        let classNames = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id } }.map(\.displayName).joined(separator: ", ")
         if course.isMakeupClass, let credit = repo.makeupCredits.first(where: { $0.studentID == student.id }) {
-            let source = repo.classes.first { $0.id == credit.sourceClassID }?.name ?? "Class"
+            let source = repo.classes.first { $0.id == credit.sourceClassID }?.displayName ?? "Archived Class"
             let expiry = credit.expiresOn.map { " · expires \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""
             return "\(credit.state.label) credit · missed \(source)\(expiry)"
         }

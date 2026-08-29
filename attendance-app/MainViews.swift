@@ -15,33 +15,36 @@ struct MainTabView: View {
 struct HomeView: View {
     @EnvironmentObject private var repo: LocalAttendanceRepository
     @State private var showAddClass = false
-    private var nextClass: ClassCourse? {
-        let weekday = Weekday(rawValue: Calendar.current.component(.weekday, from: .now)) ?? .monday
-        return repo.classes.sorted {
-            let l = (($0.weekday.rawValue - weekday.rawValue + 7) % 7) * 1440 + $0.startMinutes
-            let r = (($1.weekday.rawValue - weekday.rawValue + 7) % 7) * 1440 + $1.startMinutes
-            return l < r
-        }.first
+    private func nextClass(at now: Date) -> ClassCourse? {
+        ScheduleLogic.nextClass(from: repo.classes, at: now)
     }
     var body: some View {
-        ScrollView {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            dashboard(at: context.date)
+        }
+    }
+
+    private func dashboard(at now: Date) -> some View {
+        let weekday = Weekday(rawValue: Calendar.current.component(.weekday, from: now))
+        let todayClasses = repo.classes.filter { $0.weekday == weekday }.sorted { $0.startMinutes < $1.startMinutes }
+        return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()).uppercased()).font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(AppTheme.accent)
+                        Text(now.formatted(.dateTime.weekday(.wide).month(.wide).day()).uppercased()).font(.caption.weight(.bold)).tracking(1.4).foregroundStyle(AppTheme.accent)
                         Text("Good afternoon").font(.system(size: 34, weight: .bold, design: .rounded))
                     }
                     Spacer()
                     Image(systemName: "bell").font(.title3).frame(width: 44, height: 44).background(.white).clipShape(Circle())
                 }
-                if let course = nextClass {
+                if let course = nextClass(at: now) {
                     VStack(alignment: .leading, spacing: 17) {
                         HStack {
                             Label("UP NEXT", systemImage: "sparkles").font(.caption.weight(.bold)).tracking(1)
                             Spacer()
                             Text(course.weekday.name).font(.caption.weight(.semibold))
                         }.foregroundStyle(.white.opacity(0.8))
-                        Text(course.name).font(.system(size: 34, weight: .bold, design: .rounded))
+                        Text(course.displayName).font(.system(size: 34, weight: .bold, design: .rounded))
                         HStack {
                             Label(course.timeLabel, systemImage: "clock")
                             if !course.location.isEmpty {
@@ -59,25 +62,25 @@ struct HomeView: View {
                     }.padding(22).foregroundStyle(.white).background(course.color.color.gradient).clipShape(RoundedRectangle(cornerRadius: 30))
                 } else {
                     EmptyStateView(
-                        icon: "calendar.badge.plus",
-                        title: "Add your first class",
-                        message: "Your next class and attendance shortcut will appear here.",
-                        actionTitle: "Create a class"
+                        icon: "checkmark.circle",
+                        title: "Nothing else is in store.",
+                        message: "You’re all done for today.",
+                        actionTitle: repo.classes.isEmpty ? "Create a class" : nil
                     ) { showAddClass = true }
                 }
-                if !repo.classes.isEmpty {
+                if !todayClasses.isEmpty {
                     HStack {
-                        Text("Classes").font(.title2.bold())
+                        Text("Today’s classes").font(.title2.bold())
                         Spacer()
                         NavigationLink("See calendar") { CalendarView() }.font(.subheadline.weight(.semibold))
                     }
                     VStack(spacing: 10) {
-                        ForEach(repo.classes.prefix(3)) { course in
+                        ForEach(todayClasses) { course in
                             NavigationLink { ClassRosterView(course: course) } label: {
                                 HStack(spacing: 14) {
                                     RoundedRectangle(cornerRadius: 4).fill(course.color.color).frame(width: 5, height: 48)
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(course.name).font(.headline)
+                                        Text(course.displayName).font(.headline)
                                         Text(course.location.isEmpty ? course.timeLabel : "\(course.timeLabel) · \(course.location)")
                                             .font(.caption).foregroundStyle(AppTheme.muted)
                                     }
@@ -136,7 +139,7 @@ struct CalendarView: View {
                                     HStack {
                                         Circle().fill(course.color.color).frame(width: 12)
                                         VStack(alignment: .leading) {
-                                            Text(course.name).font(.headline)
+                                            Text(course.displayName).font(.headline)
                                             Text(course.location.isEmpty ? course.timeLabel : "\(course.timeLabel) · \(course.location)")
                                                 .font(.caption).foregroundStyle(AppTheme.muted)
                                         }
@@ -173,11 +176,11 @@ struct StudentDirectoryView: View {
             LazyVStack(spacing: 10) {
                 ForEach(repo.students.filter { search.isEmpty || $0.fullName.localizedCaseInsensitiveContains(search) }) { student in
                     VStack(spacing: 12) {
-                        HStack { AvatarView(student: student); VStack(alignment: .leading) { Text(student.fullName).font(.headline); Text("Grade \(student.grade)").font(.subheadline).foregroundStyle(AppTheme.muted) }; Spacer() }
+                        HStack { AvatarView(student: student); VStack(alignment: .leading) { Text(student.fullName).font(.headline); Text(student.gradeLabel).font(.subheadline).foregroundStyle(AppTheme.muted) }; Spacer() }
                         let assigned = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id } }
                         if !assigned.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack { ForEach(assigned) { Text($0.name).font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 6).background($0.color.color.opacity(0.15)).foregroundStyle($0.color.color).clipShape(Capsule()) } }
+                                HStack { ForEach(assigned) { Text($0.displayName).font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 6).background($0.color.color.opacity(0.15)).foregroundStyle($0.color.color).clipShape(Capsule()) } }
                             }
                         }
                     }.cardStyle()
@@ -187,28 +190,6 @@ struct StudentDirectoryView: View {
         }.background(AppTheme.background).navigationTitle("Students").searchable(text: $search)
             .toolbar { Button { showAdd = true } label: { Image(systemName: "plus") } }
             .sheet(isPresented: $showAdd) { AddStudentSheet() }
-    }
-}
-
-struct ReportsView: View {
-    @EnvironmentObject private var repo: LocalAttendanceRepository
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if repo.attendance.isEmpty {
-                    EmptyStateView(
-                        icon: "chart.bar",
-                        title: "No attendance data yet",
-                        message: "Reports will appear after you save attendance for a class."
-                    )
-                } else {
-                    Text("Attendance summary").font(.title2.bold())
-                    DashboardMiniCard(icon: "person.2.fill", value: "\(Set(repo.attendance.map(\.studentID)).count)", label: "Students recorded", color: AppTheme.deep)
-                    DashboardMiniCard(icon: "checkmark.circle.fill", value: "\(repo.attendance.filter { $0.status == .present }.count)", label: "Present marks", color: .green)
-                    DashboardMiniCard(icon: "arrow.triangle.2.circlepath", value: "\(repo.makeupCredits.filter { $0.state == .completed }.count)", label: "Makeups completed", color: .orange)
-                }
-            }.padding(20)
-        }.background(AppTheme.background).navigationTitle("Reports")
     }
 }
 

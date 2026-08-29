@@ -10,13 +10,15 @@ enum AppTheme {
 }
 
 struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(AppTheme.ink.opacity(configuration.isPressed ? 0.78 : 1))
-            .foregroundStyle(.white)
+            .background(AppTheme.ink.opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.28))
+            .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.75))
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
     }

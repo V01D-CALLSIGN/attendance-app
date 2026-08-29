@@ -12,6 +12,8 @@ protocol AttendanceRepository: AnyObject {
 
     func addStudent(_ student: Student)
     func addClass(_ course: ClassCourse)
+    func updateClass(_ course: ClassCourse)
+    func removeClass(id: UUID)
     func setEnrollment(studentID: UUID, classID: UUID, assigned: Bool)
     func session(for course: ClassCourse, on date: Date) -> ClassSession
     func saveAttendance(sessionID: UUID, records: [AttendanceRecord])
@@ -27,6 +29,7 @@ private struct LocalSnapshot: Codable {
     var attendance: [AttendanceRecord] = []
     var makeupCredits: [MakeupCredit] = []
     var setupComplete = false
+    var onboardingStarted: Bool? = nil
 }
 
 @MainActor
@@ -38,6 +41,9 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
     @Published private(set) var attendance: [AttendanceRecord]
     @Published private(set) var makeupCredits: [MakeupCredit]
     @Published var setupComplete: Bool {
+        didSet { persist() }
+    }
+    @Published var onboardingStarted: Bool {
         didSet { persist() }
     }
 
@@ -53,6 +59,8 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         attendance = snapshot.attendance
         makeupCredits = snapshot.makeupCredits
         setupComplete = snapshot.setupComplete
+        onboardingStarted = snapshot.onboardingStarted
+            ?? (snapshot.setupComplete || !snapshot.classes.isEmpty || !snapshot.students.isEmpty)
     }
 
     private static var defaultStorageURL: URL {
@@ -76,7 +84,8 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
             sessions: sessions,
             attendance: attendance,
             makeupCredits: makeupCredits,
-            setupComplete: setupComplete
+            setupComplete: setupComplete,
+            onboardingStarted: onboardingStarted
         )
         do {
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -97,10 +106,29 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         persist()
     }
 
+    func updateClass(_ course: ClassCourse) {
+        guard let index = classes.firstIndex(where: { $0.id == course.id }) else { return }
+        classes[index] = course
+        persist()
+    }
+
+    func removeClass(id: UUID) {
+        classes.removeAll { $0.id == id }
+        persist()
+    }
+
     func setEnrollment(studentID: UUID, classID: UUID, assigned: Bool) {
         if assigned {
             guard !enrollments.contains(where: { $0.studentID == studentID && $0.classID == classID }) else { return }
-            enrollments.append(Enrollment(studentID: studentID, classID: classID))
+            let course = classes.first { $0.id == classID }
+            enrollments.append(Enrollment(
+                studentID: studentID,
+                classID: classID,
+                classNameSnapshot: course?.displayName,
+                weekdaySnapshot: course?.weekday,
+                startMinutesSnapshot: course?.startMinutes,
+                endMinutesSnapshot: course?.endMinutes
+            ))
         } else {
             enrollments.removeAll { $0.studentID == studentID && $0.classID == classID }
         }
@@ -112,7 +140,13 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         if let existing = sessions.first(where: { $0.classID == course.id && Calendar.current.isDate($0.date, inSameDayAs: day) }) {
             return existing
         }
-        let new = ClassSession(classID: course.id, date: day)
+        let new = ClassSession(
+            classID: course.id,
+            date: day,
+            classNameSnapshot: course.displayName,
+            startMinutesSnapshot: course.startMinutes,
+            endMinutesSnapshot: course.endMinutes
+        )
         sessions.append(new)
         persist()
         return new
@@ -175,6 +209,7 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         attendance = []
         makeupCredits = []
         setupComplete = false
+        onboardingStarted = false
         try? FileManager.default.removeItem(at: storageURL)
     }
 }

@@ -6,6 +6,31 @@ enum Weekday: Int, CaseIterable, Codable, Identifiable {
     var id: Int { rawValue }
     var name: String { Calendar.current.weekdaySymbols[rawValue - 1] }
     var short: String { String(name.prefix(3)) }
+    static let mondayFirst: [Weekday] = [.monday, .tuesday, .wednesday, .thursday, .friday, .saturday, .sunday]
+}
+
+enum ClassType: String, CaseIterable, Codable, Identifiable {
+    case art = "Art"
+    case study = "Study"
+    var id: String { rawValue }
+}
+
+enum GradeOption: String, CaseIterable, Codable, Identifiable {
+    case preK = "Pre-K"
+    case kindergarten = "Kindergarten"
+    case grade1 = "Grade 1"
+    case grade2 = "Grade 2"
+    case grade3 = "Grade 3"
+    case grade4 = "Grade 4"
+    case grade5 = "Grade 5"
+    case grade6 = "Grade 6"
+    case grade7 = "Grade 7"
+    case grade8 = "Grade 8"
+    case grade9 = "Grade 9"
+    case grade10 = "Grade 10"
+    case grade11 = "Grade 11"
+    case grade12 = "Grade 12"
+    var id: String { rawValue }
 }
 
 enum ClassColor: String, CaseIterable, Codable, Identifiable {
@@ -31,6 +56,9 @@ struct Student: Identifiable, Hashable, Codable {
     var notes: String = ""
     var fullName: String { "\(firstName) \(lastName)" }
     var initials: String { "\(firstName.first.map(String.init) ?? "")\(lastName.first.map(String.init) ?? "")".uppercased() }
+    var gradeLabel: String {
+        grade.hasPrefix("Grade") || grade == "Pre-K" || grade == "Kindergarten" ? grade : "Grade \(grade)"
+    }
 }
 
 struct ClassCourse: Identifiable, Hashable, Codable {
@@ -46,6 +74,7 @@ struct ClassCourse: Identifiable, Hashable, Codable {
     var color: ClassColor
     var isMakeupClass = false
 
+    var displayName: String { "\(name) Class \(weekday.name)" }
     var timeLabel: String { "\(Self.time(startMinutes))–\(Self.time(endMinutes))" }
     private static func time(_ minutes: Int) -> String {
         let hour = minutes / 60, minute = minutes % 60
@@ -60,6 +89,10 @@ struct Enrollment: Identifiable, Hashable, Codable {
     let classID: UUID
     var startsOn: Date = .now
     var endsOn: Date? = nil
+    var classNameSnapshot: String? = nil
+    var weekdaySnapshot: Weekday? = nil
+    var startMinutesSnapshot: Int? = nil
+    var endMinutesSnapshot: Int? = nil
 }
 
 struct ClassSession: Identifiable, Hashable, Codable {
@@ -67,6 +100,24 @@ struct ClassSession: Identifiable, Hashable, Codable {
     let classID: UUID
     let date: Date
     var isComplete = false
+    var classNameSnapshot: String? = nil
+    var startMinutesSnapshot: Int? = nil
+    var endMinutesSnapshot: Int? = nil
+    var isCancelled: Bool? = nil
+
+    func displayName(classes: [ClassCourse]) -> String {
+        classNameSnapshot ?? classes.first(where: { $0.id == classID })?.displayName ?? "Archived Class"
+    }
+
+    func timeLabel(classes: [ClassCourse]) -> String {
+        if let startMinutesSnapshot, let endMinutesSnapshot {
+            return ClassCourse(
+                name: "", weekday: .monday, startMinutes: startMinutesSnapshot,
+                endMinutes: endMinutesSnapshot, location: "", color: .blue
+            ).timeLabel
+        }
+        return classes.first(where: { $0.id == classID })?.timeLabel ?? "Time unavailable"
+    }
 }
 
 enum AttendanceStatus: String, CaseIterable, Codable, Identifiable {
