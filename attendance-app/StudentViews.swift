@@ -45,10 +45,27 @@ struct StudentProfileView: View {
             }
         }
         .navigationTitle("Student profile").navigationBarTitleDisplayMode(.inline)
-        .toolbar { if student != nil { Button("Edit Student") { edit = true } } }
+        .toolbar {
+            if let student {
+                if student.active {
+                    Button("Edit Student") { edit = true }
+                } else {
+                    Menu {
+                        Button { restore(student) } label: { Label("Restore Student", systemImage: "arrow.uturn.backward.circle") }
+                        Button { edit = true } label: { Label("Edit Student", systemImage: "pencil") }
+                    } label: { Label("Actions", systemImage: "ellipsis.circle") }
+                }
+            }
+        }
         .sheet(isPresented: $edit) {
             if let student { NavigationStack { StudentEditorView(student: student) } }
         }
+    }
+
+    private func restore(_ student: Student) {
+        var restored = student
+        restored.isActive = true
+        _ = repo.updateStudent(restored)
     }
 }
 
@@ -68,6 +85,9 @@ struct StudentEditorView: View {
     @State private var assigned: Set<UUID> = []
     @State private var baselineAssigned: Set<UUID> = []
     @State private var confirmDelete = false
+    @State private var confirmDiscard = false
+    @State private var classSearch = ""
+    @State private var classType = "All"
 
     init(student: Student) {
         original = student
@@ -106,8 +126,13 @@ struct StudentEditorView: View {
                 TextField("Emergency contact", text: $emergency)
             }
             Section("Assigned classes") {
-                if repo.classes.isEmpty { Text("No classes available.").foregroundStyle(AppTheme.muted) }
-                ForEach(repo.classes) { course in
+                TextField("Search classes", text: $classSearch)
+                Picker("Class type", selection: $classType) {
+                    Text("All classes").tag("All")
+                    ForEach(ClassType.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }
+                if filteredClasses.isEmpty { Text(repo.classes.isEmpty ? "No classes available." : "No matching classes.").foregroundStyle(AppTheme.muted) }
+                ForEach(filteredClasses) { course in
                     Toggle(isOn: assignmentBinding(course.id)) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(course.displayName)
@@ -117,12 +142,12 @@ struct StudentEditorView: View {
                 }
             }
             Section("Notes") { TextField("Notes", text: $notes, axis: .vertical) }
-            Section { Button("Delete student", role: .destructive) { confirmDelete = true } }
+            Section { Button(hasHistory ? "Archive Student" : "Delete Student", role: .destructive) { confirmDelete = true } }
             if let error = repo.lastError { Section { Text(error).foregroundStyle(.red) } }
         }
         .navigationTitle("Edit Student").navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { if changed { confirmDiscard = true } else { dismiss() } } }
             ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(!valid || !changed) }
         }
         .onAppear {
@@ -132,7 +157,7 @@ struct StudentEditorView: View {
         }
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
-            Task { if let data = try? await item.loadTransferable(type: Data.self) { photoData = data } }
+            Task { if let data = try? await item.loadTransferable(type: Data.self) { photoData = compressedPhoto(data) } }
         }
         .alert("Delete this student?", isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}
@@ -141,6 +166,10 @@ struct StudentEditorView: View {
             }
         } message: {
             Text(hasHistory ? "This student has attendance history and will be archived. Reports and historical attendance will remain intact." : "This permanently removes the student and current class assignments.")
+        }
+        .confirmationDialog("Discard unsaved changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
         }
     }
 
@@ -151,6 +180,11 @@ struct StudentEditorView: View {
         var value = original
         value.firstName = first; value.lastName = last; value.photoData = photoData
         return value
+    }
+    private var filteredClasses: [ClassCourse] {
+        repo.classes.filter { course in
+            (classSearch.isEmpty || course.displayName.localizedCaseInsensitiveContains(classSearch)) && (classType == "All" || course.name == classType)
+        }
     }
     private var valid: Bool {
         !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && grade != nil
@@ -177,5 +211,13 @@ struct StudentEditorView: View {
             repo.setEnrollment(studentID: student.id, classID: course.id, assigned: assigned.contains(course.id))
         }
         dismiss()
+    }
+    private func compressedPhoto(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let maximum: CGFloat = 600
+        let scale = min(1, maximum / max(image.size.width, image.size.height))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let rendered = UIGraphicsImageRenderer(size: size).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        return rendered.jpegData(compressionQuality: 0.72)
     }
 }

@@ -24,7 +24,43 @@ struct CalendarOccurrence: Identifiable, Hashable {
     }
 }
 
+struct CalendarOccurrencePlacement: Identifiable {
+    let occurrence: CalendarOccurrence
+    let lane: Int
+    let laneCount: Int
+    var id: String { occurrence.id }
+}
+
 enum CalendarLogic {
+    static func placements(for occurrences: [CalendarOccurrence], calendar: Calendar = .current) -> [CalendarOccurrencePlacement] {
+        let grouped = Dictionary(grouping: occurrences) { calendar.startOfDay(for: $0.date) }
+        return grouped.values.flatMap { dayOccurrences in
+            let sorted = dayOccurrences.sorted { $0.startMinutes == $1.startMinutes ? $0.endMinutes < $1.endMinutes : $0.startMinutes < $1.startMinutes }
+            var groups: [[CalendarOccurrence]] = []
+            var current: [CalendarOccurrence] = []
+            var groupEnd = -1
+            for occurrence in sorted {
+                if !current.isEmpty && occurrence.startMinutes >= groupEnd {
+                    groups.append(current); current = []; groupEnd = -1
+                }
+                current.append(occurrence)
+                groupEnd = max(groupEnd, occurrence.endMinutes)
+            }
+            if !current.isEmpty { groups.append(current) }
+
+            return groups.flatMap { group -> [CalendarOccurrencePlacement] in
+                var laneEnds: [Int] = []
+                var assigned: [(CalendarOccurrence, Int)] = []
+                for occurrence in group {
+                    let lane = laneEnds.firstIndex(where: { $0 <= occurrence.startMinutes }) ?? laneEnds.count
+                    if lane == laneEnds.count { laneEnds.append(occurrence.endMinutes) } else { laneEnds[lane] = occurrence.endMinutes }
+                    assigned.append((occurrence, lane))
+                }
+                return assigned.map { CalendarOccurrencePlacement(occurrence: $0.0, lane: $0.1, laneCount: laneEnds.count) }
+            }
+        }
+    }
+
     static func startOfWeek(containing date: Date, calendar: Calendar = .current) -> Date {
         var calendar = calendar
         calendar.firstWeekday = 2

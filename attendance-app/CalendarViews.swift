@@ -11,6 +11,7 @@ struct CalendarView: View {
     @State private var week = CalendarLogic.startOfWeek(containing: .now)
     @State private var selected: CalendarOccurrence?
     @State private var createSeed: CalendarSeed?
+    @State private var pendingSeed: CalendarSeed?
     private let calendar = Calendar.current
     private let dayWidth: CGFloat = 94
     private let timeWidth: CGFloat = 54
@@ -21,6 +22,7 @@ struct CalendarView: View {
     private var occurrences: [CalendarOccurrence] {
         CalendarLogic.occurrences(courses: repo.classes, sessions: repo.sessions, week: week)
     }
+    private var placements: [CalendarOccurrencePlacement] { CalendarLogic.placements(for: occurrences) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,6 +35,7 @@ struct CalendarView: View {
                             ScrollView(.vertical) {
                                 ZStack(alignment: .topLeading) {
                                     grid
+                                    pendingClassBlock
                                     classBlocks
                                     currentTimeIndicator
                                 }
@@ -73,7 +76,7 @@ struct CalendarView: View {
             Rectangle().fill(.white)
             ForEach(Array(days.enumerated()), id: \.offset) { index, day in
                 VStack(spacing: 1) {
-                    Text(day.formatted(.dateTime.weekday(.narrow))).font(.caption.bold())
+                    Text(day.formatted(.dateTime.weekday(.abbreviated))).font(.caption.bold())
                     Text(day.formatted(.dateTime.day())).font(.headline)
                 }
                 .foregroundStyle(calendar.isDateInToday(day) ? .white : AppTheme.ink)
@@ -133,7 +136,7 @@ struct CalendarView: View {
                         .id(dayIndex == 0 ? "slot-\(slot)" : "cell-\(dayIndex)-\(slot)")
                         .onTapGesture {
                             let date = days[dayIndex]
-                            createSeed = CalendarSeed(date: date, startMinutes: slot * 30)
+                            beginCreating(on: date, startMinutes: slot * 30)
                         }
                 }
             }
@@ -141,26 +144,57 @@ struct CalendarView: View {
     }
 
     private var classBlocks: some View {
-        ForEach(occurrences) { occurrence in
+        ForEach(placements) { placement in
+            let occurrence = placement.occurrence
             let dayIndex = days.firstIndex(where: { calendar.isDate($0, inSameDayAs: occurrence.date) }) ?? 0
             let duration = max(30, occurrence.endMinutes - occurrence.startMinutes)
+            let availableWidth = dayWidth - 6
+            let blockWidth = availableWidth / CGFloat(placement.laneCount)
             Button { selected = occurrence } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(occurrence.course.name).font(.caption.bold()).lineLimit(1)
+                    HStack(spacing: 3) {
+                        Image(systemName: occurrence.course.name == ClassType.art.rawValue ? "paintbrush.fill" : "book.fill")
+                        Text(occurrence.course.name).font(.caption.bold()).lineLimit(1)
+                        if occurrence.isMakeupClass { Image(systemName: "arrow.triangle.2.circlepath") }
+                        if isComplete(occurrence) { Image(systemName: "checkmark.circle.fill") }
+                    }.font(.system(size: 10, weight: .bold))
                     Text(shortTime(occurrence.startMinutes)).font(.system(size: 10, weight: .medium)).lineLimit(1)
+                    if duration >= 60 { Text("\(repo.students(in: occurrence.course.id).count) students").font(.system(size: 9)).lineLimit(1) }
                 }
                 .foregroundStyle(.white)
                 .padding(5)
-                .frame(width: dayWidth - 6, height: max(30, CGFloat(duration) / 30 * slotHeight - 3), alignment: .topLeading)
+                .frame(width: blockWidth - 2, height: max(30, CGFloat(duration) / 30 * slotHeight - 3), alignment: .topLeading)
                 .background(occurrence.course.color.color.gradient)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .shadow(color: occurrence.course.color.color.opacity(0.2), radius: 3, y: 2)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(occurrence.displayName), \(occurrence.timeLabel)\(isComplete(occurrence) ? ", attendance complete" : "")")
+            .accessibilityHint("Opens class details")
             .position(
-                x: timeWidth + CGFloat(dayIndex) * dayWidth + dayWidth / 2,
+                x: timeWidth + CGFloat(dayIndex) * dayWidth + 3 + blockWidth * (CGFloat(placement.lane) + 0.5),
                 y: CGFloat(occurrence.startMinutes) / 30 * slotHeight + CGFloat(duration) / 60 * slotHeight
             )
+        }
+    }
+
+    @ViewBuilder private var pendingClassBlock: some View {
+        if let seed = pendingSeed,
+           let dayIndex = days.firstIndex(where: { calendar.isDate($0, inSameDayAs: seed.date) }) {
+            HStack(spacing: 4) {
+                Image(systemName: "plus.circle.fill")
+                Text(shortTime(seed.startMinutes)).font(.caption.bold())
+            }
+            .foregroundStyle(AppTheme.deep)
+            .padding(6)
+            .frame(width: dayWidth - 6, height: slotHeight * 2 - 3, alignment: .topLeading)
+            .background(AppTheme.deep.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.deep, style: StrokeStyle(lineWidth: 1.5, dash: [4])))
+            .position(
+                x: timeWidth + CGFloat(dayIndex) * dayWidth + dayWidth / 2,
+                y: CGFloat(seed.startMinutes) / 30 * slotHeight + slotHeight
+            )
+            .transition(.scale.combined(with: .opacity))
         }
     }
 
@@ -169,9 +203,10 @@ struct CalendarView: View {
             let now = Date.now
             let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
             let dayIndex = days.firstIndex(where: { calendar.isDateInToday($0) }) ?? 0
-            HStack(spacing: 0) {
-                Circle().fill(Color.red).frame(width: 7, height: 7)
-                Rectangle().fill(Color.red).frame(width: dayWidth - 7, height: 1.5)
+            HStack(spacing: 2) {
+                Text("Now").font(.system(size: 8, weight: .bold)).foregroundStyle(.red)
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Rectangle().fill(Color.red).frame(height: 1.5)
             }
             .frame(width: dayWidth)
             .position(
@@ -186,6 +221,20 @@ struct CalendarView: View {
         return "\(week.formatted(.dateTime.month(.abbreviated).day())) – \(end.formatted(.dateTime.month(.abbreviated).day().year()))"
     }
     private func moveWeek(_ amount: Int) { week = calendar.date(byAdding: .weekOfYear, value: amount, to: week)! }
+    private func beginCreating(on date: Date, startMinutes: Int) {
+        let seed = CalendarSeed(date: date, startMinutes: startMinutes)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.snappy(duration: 0.15)) { pendingSeed = seed }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            createSeed = seed
+            pendingSeed = nil
+        }
+    }
+    private func isComplete(_ occurrence: CalendarOccurrence) -> Bool {
+        occurrence.session?.isComplete == true || repo.sessions.contains {
+            $0.classID == occurrence.course.id && calendar.isDate($0.date, inSameDayAs: occurrence.date) && $0.isComplete
+        }
+    }
     private func scrollHorizontally(_ proxy: ScrollViewProxy) {
         let today = days.firstIndex(where: { calendar.isDateInToday($0) })
         let target = today ?? occurrences.first.flatMap { occurrence in days.firstIndex { calendar.isDate($0, inSameDayAs: occurrence.date) } } ?? 0
@@ -206,29 +255,53 @@ struct ClassDetailsView: View {
     @Environment(\.dismiss) private var dismiss
     let occurrence: CalendarOccurrence
     @State private var edit = false
+    @State private var duplicate = false
 
-    private var assigned: [Student] { repo.students(in: occurrence.course.id) }
+    private var current: CalendarOccurrence {
+        guard let course = repo.classes.first(where: { $0.id == occurrence.course.id }) else { return occurrence }
+        if let sessionID = occurrence.session?.id, let session = repo.sessions.first(where: { $0.id == sessionID }) {
+            return CalendarOccurrence(id: session.id.uuidString, course: course, date: session.date, originalDate: session.originalDate ?? session.date, startMinutes: session.startMinutesSnapshot ?? course.startMinutes, endMinutes: session.endMinutesSnapshot ?? course.endMinutes, session: session)
+        }
+        let week = CalendarLogic.startOfWeek(containing: occurrence.date)
+        let offset = course.weekday == .sunday ? 6 : course.weekday.rawValue - Weekday.monday.rawValue
+        let updatedDate = Calendar.current.date(byAdding: .day, value: offset, to: week) ?? occurrence.date
+        return CalendarOccurrence(id: occurrence.id, course: course, date: updatedDate, originalDate: occurrence.originalDate, startMinutes: course.startMinutes, endMinutes: course.endMinutes, session: nil)
+    }
+    private var assigned: [Student] { repo.students(in: current.course.id) }
     private var matchingSession: ClassSession? {
-        occurrence.session ?? repo.sessions.first { $0.classID == occurrence.course.id && Calendar.current.isDate($0.date, inSameDayAs: occurrence.date) }
+        current.session ?? repo.sessions.first { $0.classID == current.course.id && Calendar.current.isDate($0.date, inSameDayAs: current.date) }
+    }
+    private var attendanceCourse: ClassCourse {
+        var course = current.course
+        course.weekday = current.weekday; course.startMinutes = current.startMinutes; course.endMinutes = current.endMinutes
+        course.location = current.location; course.notes = current.notes; course.isMakeupClass = current.isMakeupClass
+        return course
     }
 
     var body: some View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(occurrence.course.name.uppercased()).font(.caption.bold()).foregroundStyle(occurrence.course.color.color)
-                    Text(occurrence.displayName).font(.title2.bold())
-                    Label(occurrence.date.formatted(date: .complete, time: .omitted), systemImage: "calendar")
-                    Label(occurrence.timeLabel, systemImage: "clock")
-                    if !occurrence.location.isEmpty { Label(occurrence.location, systemImage: "mappin") }
+                    Text(current.course.name.uppercased()).font(.caption.bold()).foregroundStyle(current.course.color.color)
+                    Text(current.displayName).font(.title2.bold())
+                    Label(current.date.formatted(date: .complete, time: .omitted), systemImage: "calendar")
+                    Label(current.timeLabel, systemImage: "clock")
+                    if !current.location.isEmpty { Label(current.location, systemImage: "mappin") }
                 }.padding(.vertical, 6)
             }
+            if Calendar.current.isDateInToday(current.date) {
+                Section {
+                    NavigationLink { ClassRosterView(course: attendanceCourse) } label: {
+                        Label("Take Attendance", systemImage: "checkmark.circle.fill").font(.headline).foregroundStyle(current.course.color.color)
+                    }
+                }
+            }
             Section("Class details") {
-                LabeledContent("Day", value: occurrence.weekday.name)
-                LabeledContent("Recurrence", value: occurrence.recurrence)
+                LabeledContent("Day", value: current.weekday.name)
+                LabeledContent("Recurrence", value: current.recurrence)
                 LabeledContent("Attendance", value: matchingSession?.isComplete == true ? "Completed" : "Not taken")
-                LabeledContent("Makeup class", value: occurrence.isMakeupClass ? "Yes" : "No")
-                if !occurrence.notes.isEmpty { Text(occurrence.notes) }
+                LabeledContent("Makeup class", value: current.isMakeupClass ? "Yes" : "No")
+                if !current.notes.isEmpty { Text(current.notes) }
             }
             Section("Assigned students · \(assigned.count)") {
                 if assigned.isEmpty { Text("No students yet.").foregroundStyle(AppTheme.muted) }
@@ -240,12 +313,23 @@ struct ClassDetailsView: View {
         .navigationTitle("Class details").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
-            ToolbarItem(placement: .primaryAction) { Button("Edit") { edit = true }.fontWeight(.semibold) }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { edit = true } label: { Label("Edit Class", systemImage: "pencil") }
+                    Button { edit = true } label: { Label("Manage Students", systemImage: "person.badge.plus") }
+                    Button { duplicate = true } label: { Label("Duplicate Class", systemImage: "plus.square.on.square") }
+                } label: { Label("Actions", systemImage: "ellipsis.circle").fontWeight(.semibold) }
+            }
         }
         .sheet(isPresented: $edit) {
-            NavigationStack { ClassEditorView(occurrence: occurrence) }
+            NavigationStack { ClassEditorView(occurrence: current) { returnToCalendar() } }
+        }
+        .sheet(isPresented: $duplicate) {
+            NavigationStack { ClassEditorView(duplicateOf: current) { returnToCalendar() } }
         }
     }
+
+    private func returnToCalendar() { DispatchQueue.main.async { dismiss() } }
 }
 
 struct ClassEditorView: View {
@@ -261,6 +345,7 @@ struct ClassEditorView: View {
     private let initialNotes: String
     private let initialMakeup: Bool
     private let initialAssigned: Set<UUID>
+    private let onSaved: () -> Void
 
     @State private var type: ClassType?
     @State private var date: Date
@@ -272,11 +357,18 @@ struct ClassEditorView: View {
     @State private var isMakeup: Bool
     @State private var assigned: Set<UUID>
     @State private var baselineAssigned: Set<UUID> = []
-    @State private var scope: RecurrenceEditScope = .thisOnly
     @State private var confirmDelete = false
+    @State private var showEditScope = false
+    @State private var showDeleteScope = false
+    @State private var deleteScope: RecurrenceEditScope = .every
+    @State private var confirmDiscard = false
+    @State private var studentSearch = ""
+    @State private var studentGrade = "All"
+    @State private var endWasManuallyChanged = false
 
-    init(occurrence: CalendarOccurrence) {
+    init(occurrence: CalendarOccurrence, onSaved: @escaping () -> Void = {}) {
         self.occurrence = occurrence
+        self.onSaved = onSaved
         let ids: Set<UUID> = []
         initialType = ClassType(rawValue: occurrence.course.name)
         initialDate = occurrence.date
@@ -298,8 +390,9 @@ struct ClassEditorView: View {
         _assigned = State(initialValue: ids)
     }
 
-    init(seedDate: Date, seedStartMinutes: Int) {
+    init(seedDate: Date, seedStartMinutes: Int, onSaved: @escaping () -> Void = {}) {
         occurrence = nil
+        self.onSaved = onSaved
         initialType = nil
         initialDate = seedDate
         initialStart = seedStartMinutes
@@ -320,6 +413,29 @@ struct ClassEditorView: View {
         _assigned = State(initialValue: [])
     }
 
+    init(duplicateOf source: CalendarOccurrence, onSaved: @escaping () -> Void = {}) {
+        occurrence = nil
+        self.onSaved = onSaved
+        initialType = ClassType(rawValue: source.course.name)
+        initialDate = source.date
+        initialStart = source.startMinutes
+        initialEnd = source.endMinutes
+        initialLocation = source.location
+        initialRecurrence = source.recurrence
+        initialNotes = source.notes
+        initialMakeup = source.isMakeupClass
+        initialAssigned = []
+        _type = State(initialValue: initialType)
+        _date = State(initialValue: source.date)
+        _start = State(initialValue: Self.time(source.startMinutes, on: source.date))
+        _end = State(initialValue: Self.time(source.endMinutes, on: source.date))
+        _location = State(initialValue: source.location)
+        _recurrence = State(initialValue: source.recurrence)
+        _notes = State(initialValue: source.notes)
+        _isMakeup = State(initialValue: source.isMakeupClass)
+        _assigned = State(initialValue: [])
+    }
+
     var body: some View {
         Form {
             Section("Class") {
@@ -329,7 +445,7 @@ struct ClassEditorView: View {
                 }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 TimeWheelField(title: "Start time", selection: $start)
-                TimeWheelField(title: "End time", selection: $end)
+                TimeWheelField(title: "End time", selection: Binding(get: { end }, set: { end = $0; endWasManuallyChanged = true }))
                 if endMinutes <= startMinutes { Text("End time must be later than start time.").foregroundStyle(.red) }
                 TextField("Location", text: $location)
             }
@@ -343,30 +459,28 @@ struct ClassEditorView: View {
                 TextField("Notes", text: $notes, axis: .vertical)
             }
             Section("Assigned students") {
-                if repo.students.filter(\.active).isEmpty { Text("No students yet.").foregroundStyle(AppTheme.muted) }
-                ForEach(repo.students.filter(\.active)) { student in
+                TextField("Search students", text: $studentSearch)
+                Picker("Grade", selection: $studentGrade) {
+                    Text("All grades").tag("All")
+                    ForEach(GradeOption.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }
+                if filteredStudents.isEmpty { Text(repo.students.filter(\.active).isEmpty ? "No students yet." : "No matching students.").foregroundStyle(AppTheme.muted) }
+                ForEach(filteredStudents) { student in
                     Toggle(isOn: assignmentBinding(student.id)) {
                         HStack { AvatarView(student: student, size: 34); VStack(alignment: .leading) { Text(student.fullName); Text(student.gradeLabel).font(.caption).foregroundStyle(AppTheme.muted) } }
                     }
                 }
             }
-            if let occurrence, occurrence.course.recurrence == "Every week" {
-                Section("Apply changes to") {
-                    Picker("Scope", selection: $scope) {
-                        ForEach(RecurrenceEditScope.allCases) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.inline).labelsHidden()
-                }
-            }
             if occurrence != nil {
-                Section { Button("Delete class", role: .destructive) { confirmDelete = true } }
+                Section { Button("Remove class…", role: .destructive) { requestDelete() } }
             }
             if let error = repo.lastError { Section { Text(error).foregroundStyle(.red) } }
         }
         .navigationTitle(occurrence == nil ? "New class" : "Edit class")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.disabled(!valid || !changed) }
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { if changed { confirmDiscard = true } else { dismiss() } } }
+            ToolbarItem(placement: .confirmationAction) { Button("Save") { requestSave() }.disabled(!valid || !changed) }
         }
         .onAppear {
             guard let occurrence, assigned.isEmpty else { return }
@@ -374,24 +488,49 @@ struct ClassEditorView: View {
             assigned = existing
             baselineAssigned = existing
         }
+        .onChange(of: start) { oldValue, newValue in
+            guard !endWasManuallyChanged else { return }
+            let delta = newValue.timeIntervalSince(oldValue)
+            end = end.addingTimeInterval(delta)
+        }
         .alert("Delete this class?", isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) { deleteClass() }
+            Button("Remove", role: .destructive) { deleteClass(scope: deleteScope) }
         } message: {
-            Text("Historical attendance will be retained. The selected recurrence scope will be applied.")
+            Text("Historical attendance will be retained. This action cannot be undone.")
+        }
+        .confirmationDialog("Apply changes to", isPresented: $showEditScope, titleVisibility: .visible) {
+            ForEach(RecurrenceEditScope.allCases) { choice in Button(choice.rawValue) { save(scope: choice) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Remove which classes?", isPresented: $showDeleteScope, titleVisibility: .visible) {
+            ForEach(RecurrenceEditScope.allCases) { choice in Button(choice.rawValue, role: .destructive) { deleteScope = choice; confirmDelete = true } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Discard unsaved changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
         }
     }
 
     private var startMinutes: Int { Calendar.current.component(.hour, from: start) * 60 + Calendar.current.component(.minute, from: start) }
     private var endMinutes: Int { Calendar.current.component(.hour, from: end) * 60 + Calendar.current.component(.minute, from: end) }
     private var valid: Bool { type != nil && endMinutes > startMinutes && ["Every week", "Does not repeat"].contains(recurrence) }
+    private var filteredStudents: [Student] {
+        repo.students.filter { student in
+            student.active && (studentSearch.isEmpty || student.fullName.localizedCaseInsensitiveContains(studentSearch)) && (studentGrade == "All" || student.grade == studentGrade)
+        }
+    }
     private var changed: Bool {
         occurrence == nil || type != initialType || !Calendar.current.isDate(date, inSameDayAs: initialDate) || startMinutes != initialStart || endMinutes != initialEnd || location != initialLocation || recurrence != initialRecurrence || notes != initialNotes || isMakeup != initialMakeup || assigned != baselineAssigned
     }
     private func assignmentBinding(_ id: UUID) -> Binding<Bool> {
         Binding(get: { assigned.contains(id) }, set: { value in if value { assigned.insert(id) } else { assigned.remove(id) } })
     }
-    private func save() {
+    private func requestSave() {
+        if occurrence?.course.recurrence == "Every week" { showEditScope = true } else { save(scope: .every) }
+    }
+    private func save(scope: RecurrenceEditScope) {
         guard let type else { return }
         let weekday = Weekday(rawValue: Calendar.current.component(.weekday, from: date)) ?? .monday
         var course = occurrence?.course ?? ClassCourse(name: type.rawValue, weekday: weekday, startMinutes: startMinutes, endMinutes: endMinutes, startDate: date, location: location, color: type == .art ? .coral : .blue)
@@ -407,15 +546,18 @@ struct ClassEditorView: View {
         course.color = type == .art ? .coral : .blue
         let saved: Bool
         if let occurrence {
-            saved = repo.saveClassEdit(original: occurrence.course, edited: course, occurrenceDate: occurrence.originalDate, scope: occurrence.course.recurrence == "Every week" ? scope : .every, assignedStudentIDs: assigned)
+            saved = repo.saveClassEdit(original: occurrence.course, edited: course, occurrenceDate: occurrence.originalDate, scope: scope, assignedStudentIDs: assigned)
         } else {
             saved = repo.createClass(course, assignedStudentIDs: assigned)
         }
-        if saved { dismiss() }
+        if saved { withAnimation(.snappy) { onSaved(); dismiss() } }
     }
-    private func deleteClass() {
+    private func requestDelete() {
+        if occurrence?.course.recurrence == "Every week" { showDeleteScope = true } else { deleteScope = .every; confirmDelete = true }
+    }
+    private func deleteClass(scope: RecurrenceEditScope) {
         guard let occurrence else { return }
-        if repo.deleteClass(occurrence.course, occurrenceDate: occurrence.originalDate, scope: occurrence.course.recurrence == "Every week" ? scope : .every) { dismiss() }
+        if repo.deleteClass(occurrence.course, occurrenceDate: occurrence.originalDate, scope: scope) { withAnimation(.snappy) { onSaved(); dismiss() } }
     }
     private static func time(_ minutes: Int, on date: Date) -> Date {
         Calendar.current.date(bySettingHour: min(minutes, 1439) / 60, minute: min(minutes, 1439) % 60, second: 0, of: date) ?? date

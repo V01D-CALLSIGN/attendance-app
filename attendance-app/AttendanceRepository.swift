@@ -74,25 +74,47 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
 
     private static func load(from url: URL) -> LocalSnapshot {
         guard let data = try? Data(contentsOf: url),
-              let snapshot = try? JSONDecoder().decode(LocalSnapshot.self, from: data) else {
+              var snapshot = try? JSONDecoder().decode(LocalSnapshot.self, from: data) else {
             return LocalSnapshot()
+        }
+        let photoDirectory = url.deletingLastPathComponent().appendingPathComponent("StudentPhotos", isDirectory: true)
+        for index in snapshot.students.indices where snapshot.students[index].photoData == nil {
+            let photoURL = photoDirectory.appendingPathComponent("\(snapshot.students[index].id.uuidString).jpg")
+            snapshot.students[index].photoData = try? Data(contentsOf: photoURL)
         }
         return snapshot
     }
 
     @discardableResult
     private func persist() -> Bool {
-        let snapshot = LocalSnapshot(
-            students: students,
-            classes: classes,
-            enrollments: enrollments,
-            sessions: sessions,
-            attendance: attendance,
-            makeupCredits: makeupCredits,
-            setupComplete: setupComplete,
-            onboardingStarted: onboardingStarted
-        )
+        var storedStudents = students
+        let photoDirectory = storageURL.deletingLastPathComponent().appendingPathComponent("StudentPhotos", isDirectory: true)
+        let snapshot: LocalSnapshot
         do {
+            try FileManager.default.createDirectory(at: photoDirectory, withIntermediateDirectories: true)
+            for index in storedStudents.indices {
+                let photoURL = photoDirectory.appendingPathComponent("\(storedStudents[index].id.uuidString).jpg")
+                if let photoData = storedStudents[index].photoData {
+                    try photoData.write(to: photoURL, options: .atomic)
+                    storedStudents[index].photoData = nil
+                } else {
+                    try? FileManager.default.removeItem(at: photoURL)
+                }
+            }
+            let validNames = Set(students.compactMap { $0.photoData == nil ? nil : "\($0.id.uuidString).jpg" })
+            for file in (try? FileManager.default.contentsOfDirectory(at: photoDirectory, includingPropertiesForKeys: nil)) ?? [] where !validNames.contains(file.lastPathComponent) {
+                try? FileManager.default.removeItem(at: file)
+            }
+            snapshot = LocalSnapshot(
+                students: storedStudents,
+                classes: classes,
+                enrollments: enrollments,
+                sessions: sessions,
+                attendance: attendance,
+                makeupCredits: makeupCredits,
+                setupComplete: setupComplete,
+                onboardingStarted: onboardingStarted
+            )
             try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(snapshot)
             try data.write(to: storageURL, options: .atomic)
@@ -387,6 +409,6 @@ final class LocalAttendanceRepository: ObservableObject, AttendanceRepository {
         makeupCredits = []
         setupComplete = false
         onboardingStarted = false
-        try? FileManager.default.removeItem(at: storageURL)
+        try? FileManager.default.removeItem(at: storageURL.deletingLastPathComponent())
     }
 }

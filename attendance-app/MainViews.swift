@@ -115,6 +115,13 @@ private struct DashboardMiniCard: View {
 struct StudentDirectoryView: View {
     @EnvironmentObject private var repo: LocalAttendanceRepository
     @State private var search = ""; @State private var showAdd = false
+    @State private var filter: StudentDirectoryFilter = .active
+    private var visibleStudents: [Student] {
+        repo.students.filter { student in
+            let matchesStatus = filter == .all || (filter == .active ? student.active : !student.active)
+            return matchesStatus && (search.isEmpty || student.fullName.localizedCaseInsensitiveContains(search))
+        }
+    }
     var body: some View {
         ScrollView {
             if repo.students.isEmpty {
@@ -126,11 +133,21 @@ struct StudentDirectoryView: View {
                 ) { showAdd = true }
                 .padding(20)
             } else {
+            Picker("Student status", selection: $filter) {
+                ForEach(StudentDirectoryFilter.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 8)
+            if visibleStudents.isEmpty {
+                EmptyStateView(
+                    icon: filter == .archived ? "archivebox" : "person.2",
+                    title: filter == .archived ? "No archived students" : "No matching students",
+                    message: filter == .archived ? "Students with attendance history appear here after they are archived." : "Try another name or student filter."
+                ).padding(16)
+            }
             LazyVStack(spacing: 10) {
-                ForEach(repo.students.filter { search.isEmpty || $0.fullName.localizedCaseInsensitiveContains(search) }) { student in
+                ForEach(visibleStudents) { student in
                     NavigationLink { StudentProfileView(studentID: student.id) } label: { VStack(spacing: 12) {
                         HStack { AvatarView(student: student); VStack(alignment: .leading) { Text(student.fullName).font(.headline); Text(student.active ? student.gradeLabel : "\(student.gradeLabel) · Inactive").font(.subheadline).foregroundStyle(AppTheme.muted) }; Spacer() }
-                        let assigned = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id } }
+                        let assigned = repo.classes.filter { course in repo.enrollments.contains { $0.studentID == student.id && $0.classID == course.id && $0.endsOn == nil } }
                         if !assigned.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack { ForEach(assigned) { Text($0.displayName).font(.caption.bold()).padding(.horizontal, 10).padding(.vertical, 6).background($0.color.color.opacity(0.15)).foregroundStyle($0.color.color).clipShape(Capsule()) } }
@@ -144,6 +161,13 @@ struct StudentDirectoryView: View {
             .toolbar { Button { showAdd = true } label: { Image(systemName: "plus") } }
             .sheet(isPresented: $showAdd) { AddStudentSheet() }
     }
+}
+
+private enum StudentDirectoryFilter: String, CaseIterable, Identifiable {
+    case active = "Active"
+    case archived = "Archived"
+    case all = "All"
+    var id: String { rawValue }
 }
 
 struct SettingsView: View {
