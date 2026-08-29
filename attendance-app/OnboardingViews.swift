@@ -49,9 +49,12 @@ private struct WelcomeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 82))
-                .foregroundStyle(AppTheme.deep)
+            Image("SolMark")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 94, height: 94)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .accessibilityLabel("Sol Check app logo")
             Text("Welcome")
                 .font(.system(size: 52, weight: .bold, design: .rounded))
                 .foregroundStyle(AppTheme.ink)
